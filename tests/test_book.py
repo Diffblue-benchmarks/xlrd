@@ -674,3 +674,54 @@ class TestUnpackSSTTable:
         buf2 = struct.pack('<H', 1) + b'\x00' + text2.encode('latin-1')
         strings, richtext = unpack_SST_table([buf1, buf2], 2)
         assert strings == [text1, text2]
+
+
+# ---------------------------------------------------------------------------
+# fake_globals_get_sheet
+# ---------------------------------------------------------------------------
+
+class TestFakeGlobalsGetSheet:
+
+    def _make_book(self):
+        """Return a bare Book instance with the minimum attributes needed."""
+        bk = Book()
+        bk.formatting_info = False
+        bk.logfile = None
+        return bk
+
+    def test_sets_sheet_names(self, mocker):
+        bk = self._make_book()
+        mocker.patch.object(bk, 'get_sheets')
+        bk.fake_globals_get_sheet()
+        assert bk._sheet_names == ['Sheet 1']
+
+    def test_sets_sh_abs_posn(self, mocker):
+        bk = self._make_book()
+        mocker.patch.object(bk, 'get_sheets')
+        bk.fake_globals_get_sheet()
+        assert bk._sh_abs_posn == [0]
+
+    def test_sets_sheet_visibility(self, mocker):
+        bk = self._make_book()
+        mocker.patch.object(bk, 'get_sheets')
+        bk.fake_globals_get_sheet()
+        assert bk._sheet_visibility == [0]
+
+    def test_appends_none_to_sheet_list(self, mocker):
+        bk = self._make_book()
+        mocker.patch.object(bk, 'get_sheets')
+        bk.fake_globals_get_sheet()
+        assert bk._sheet_list == [None]
+
+    def test_calls_get_sheets(self, mocker):
+        bk = self._make_book()
+        mock_get_sheets = mocker.patch.object(bk, 'get_sheets')
+        bk.fake_globals_get_sheet()
+        mock_get_sheets.assert_called_once_with()
+
+    def test_initialises_colour_map(self, mocker):
+        bk = self._make_book()
+        mocker.patch.object(bk, 'get_sheets')
+        bk.fake_globals_get_sheet()
+        assert hasattr(bk, 'colour_map')
+        assert isinstance(bk.colour_map, dict)
