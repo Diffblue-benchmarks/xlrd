@@ -390,6 +390,46 @@ def test_handle_palette_wrong_size_raises():
         handle_palette(book, data)
 
 
+def test_handle_palette_verbosity1_wrong_count_logs_note():
+    """Cover line 584: verbosity>=1 and n_colours != expected_n_colours logs a NOTE."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    initialise_colour_map(book)
+    # Pass 16 colours but biff8 expects 56
+    colours = [(10, 20, 30)] * 16
+    data = _make_palette_data(colours)
+    handle_palette(book, data)
+    log_output = book.logfile.getvalue()
+    assert "NOTE" in log_output
+    assert "16" in log_output
+
+
+def test_handle_palette_verbosity2_correct_count_logs():
+    """Cover line 588: blah (verbosity>=2) and n_colours == expected_n_colours logs PALETTE."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=2)
+    initialise_colour_map(book)
+    n_colours = 56
+    colours = [(i * 4, i * 4, i * 4) for i in range(n_colours)]
+    data = _make_palette_data(colours)
+    handle_palette(book, data)
+    log_output = book.logfile.getvalue()
+    assert "PALETTE" in log_output
+    assert "56" in log_output
+
+
+def test_handle_palette_verbosity2_logs_colour_changes():
+    """Cover lines 610-611: blah and new_rgb != old_rgb logs individual colour changes."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=2)
+    initialise_colour_map(book)
+    # Force all palette colours to a distinctive value so they differ from defaults
+    n_colours = 56
+    colours = [(255, 128, 64)] * n_colours
+    data = _make_palette_data(colours)
+    handle_palette(book, data)
+    log_output = book.logfile.getvalue()
+    # At least some colour changes should be logged with '->'
+    assert "->" in log_output
+
+
 # ===== palette_epilogue =====
 
 def test_palette_epilogue_marks_used_colour_indexes():
