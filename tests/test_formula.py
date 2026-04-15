@@ -9,7 +9,9 @@ import pytest
 from xlrd.formula import (
     Operand,
     Ref3D,
+    decompile_formula,
     dump_formula,
+    FMLA_TYPE_CELL,
     _opr_eq,
     _opr_ge,
     _opr_gt,
@@ -903,3 +905,44 @@ class TestDumpFormula:
         dump_formula(bk, data, 5, 80, 0, blah=1)
         output = bk.logfile.getvalue()
         assert 'sz=' in output
+
+
+# ===========================================================================
+# decompile_formula do_unaryop (lines 1400-1411)
+# ===========================================================================
+
+def make_decompile_bk():
+    """Create a minimal book object for decompile_formula tests."""
+    bk = SimpleNamespace()
+    bk.logfile = io.StringIO()
+    bk.biff_version = 80
+    bk.encoding = 'ascii'
+    return bk
+
+
+class TestDecompileFormulaUnaryOp:
+    """Tests for do_unaryop inside decompile_formula (tUplus, tUminus, tPercent)."""
+
+    def test_unary_minus(self):
+        """tUminus (0x13) negates the top-of-stack operand text."""
+        bk = make_decompile_bk()
+        # tInt 5 (3 bytes) followed by tUminus (1 byte)
+        data = bytes([0x1e, 0x05, 0x00, 0x13])
+        result = decompile_formula(bk, data, 4, FMLA_TYPE_CELL)
+        assert result == '-5.0'
+
+    def test_unary_plus(self):
+        """tUplus (0x12) applies unary plus to the top-of-stack operand text."""
+        bk = make_decompile_bk()
+        # tInt 5 (3 bytes) followed by tUplus (1 byte)
+        data = bytes([0x1e, 0x05, 0x00, 0x12])
+        result = decompile_formula(bk, data, 4, FMLA_TYPE_CELL)
+        assert result == '+5.0'
+
+    def test_percent(self):
+        """tPercent (0x14) appends '%' to the top-of-stack operand text."""
+        bk = make_decompile_bk()
+        # tInt 5 (3 bytes) followed by tPercent (1 byte)
+        data = bytes([0x1e, 0x05, 0x00, 0x14])
+        result = decompile_formula(bk, data, 4, FMLA_TYPE_CELL)
+        assert result == '5.0%'
