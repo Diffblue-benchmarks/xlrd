@@ -946,3 +946,74 @@ class TestDecompileFormulaUnaryOp:
         data = bytes([0x1e, 0x05, 0x00, 0x14])
         result = decompile_formula(bk, data, 4, FMLA_TYPE_CELL)
         assert result == '5.0%'
+
+
+# ===========================================================================
+# decompile_formula do_binop (lines 1383-1398)
+# ===========================================================================
+
+class TestDecompileFormulaBinOp:
+    """Tests for do_binop inside decompile_formula."""
+
+    def test_add(self):
+        """tAdd (0x03) produces 'a+b' text with no parentheses for leaf operands."""
+        bk = make_decompile_bk()
+        # tInt 3, tInt 2, tAdd
+        data = bytes([0x1e, 0x03, 0x00, 0x1e, 0x02, 0x00, 0x03])
+        result = decompile_formula(bk, data, 7, FMLA_TYPE_CELL)
+        assert result == '3.0+2.0'
+
+    def test_sub(self):
+        """tSub (0x04) produces 'a-b' text."""
+        bk = make_decompile_bk()
+        # tInt 5, tInt 3, tSub
+        data = bytes([0x1e, 0x05, 0x00, 0x1e, 0x03, 0x00, 0x04])
+        result = decompile_formula(bk, data, 7, FMLA_TYPE_CELL)
+        assert result == '5.0-3.0'
+
+    def test_mul(self):
+        """tMul (0x05) produces 'a*b' text."""
+        bk = make_decompile_bk()
+        # tInt 4, tInt 5, tMul
+        data = bytes([0x1e, 0x04, 0x00, 0x1e, 0x05, 0x00, 0x05])
+        result = decompile_formula(bk, data, 7, FMLA_TYPE_CELL)
+        assert result == '4.0*5.0'
+
+    def test_div(self):
+        """tDiv (0x06) produces 'a/b' text."""
+        bk = make_decompile_bk()
+        # tInt 10, tInt 2, tDiv
+        data = bytes([0x1e, 0x0a, 0x00, 0x1e, 0x02, 0x00, 0x06])
+        result = decompile_formula(bk, data, 7, FMLA_TYPE_CELL)
+        assert result == '10.0/2.0'
+
+    def test_parentheses_lower_rank_operand(self):
+        """Operand with rank lower than operator rank gets wrapped in parentheses."""
+        bk = make_decompile_bk()
+        # (1+2)*3: tInt 1, tInt 2, tAdd (rank=30), tInt 3, tMul (rank=40)
+        # After tAdd, result has rank=30; tMul has rank=40, so 30 < 40 → parentheses
+        data = bytes([
+            0x1e, 0x01, 0x00,  # tInt 1
+            0x1e, 0x02, 0x00,  # tInt 2
+            0x03,              # tAdd
+            0x1e, 0x03, 0x00,  # tInt 3
+            0x05,              # tMul
+        ])
+        result = decompile_formula(bk, data, 11, FMLA_TYPE_CELL)
+        assert result == '(1.0+2.0)*3.0'
+
+    def test_result_operand_has_correct_kind(self):
+        """do_binop creates a result Operand with the correct result_kind (oNUM for tAdd)."""
+        bk = make_decompile_bk()
+        # tInt 2, tInt 3, tAdd — result should have text '2.0+3.0'
+        data = bytes([0x1e, 0x02, 0x00, 0x1e, 0x03, 0x00, 0x03])
+        result = decompile_formula(bk, data, 7, FMLA_TYPE_CELL)
+        assert result == '2.0+3.0'
+
+    def test_lt_comparison(self):
+        """tLT (0x09) produces 'a<b' text with result_kind oBOOL."""
+        bk = make_decompile_bk()
+        # tInt 1, tInt 2, tLT
+        data = bytes([0x1e, 0x01, 0x00, 0x1e, 0x02, 0x00, 0x09])
+        result = decompile_formula(bk, data, 7, FMLA_TYPE_CELL)
+        assert result == '1.0<2.0'
