@@ -725,3 +725,68 @@ class TestFakeGlobalsGetSheet:
         bk.fake_globals_get_sheet()
         assert hasattr(bk, 'colour_map')
         assert isinstance(bk.colour_map, dict)
+
+
+# ---------------------------------------------------------------------------
+# Book.get_record_parts_conditional
+# ---------------------------------------------------------------------------
+
+class TestGetRecordPartsConditional:
+
+    def _make_book_with_mem(self, mem, position=0):
+        """Return a bare Book with mem and _position set."""
+        bk = Book()
+        bk.mem = mem
+        bk._position = position
+        return bk
+
+    def _make_record(self, rec_type, data=b''):
+        return struct.pack('<HH', rec_type, len(data)) + data
+
+    def test_non_matching_code_returns_empty(self):
+        """When the record code does not match reqd_record, return (None, 0, b'')."""
+        record = self._make_record(0x0042, b'\x01\x02\x03\x04')
+        bk = self._make_book_with_mem(record)
+        result = bk.get_record_parts_conditional(0x1234)
+        assert result == (None, 0, b'')
+
+    def test_non_matching_code_does_not_advance_position(self):
+        """Position must not change when the code does not match."""
+        record = self._make_record(0x0042, b'\x01\x02')
+        bk = self._make_book_with_mem(record, position=0)
+        bk.get_record_parts_conditional(0x9999)
+        assert bk._position == 0
+
+    def test_matching_code_returns_correct_tuple(self):
+        """When code matches, return (code, length, data)."""
+        data = b'\xAA\xBB\xCC\xDD'
+        record = self._make_record(0x0042, data)
+        bk = self._make_book_with_mem(record)
+        result = bk.get_record_parts_conditional(0x0042)
+        assert result == (0x0042, 4, data)
+
+    def test_matching_code_advances_position(self):
+        """Position must advance past the record header and data on match."""
+        data = b'\x01\x02\x03'
+        record = self._make_record(0x0085, data)
+        bk = self._make_book_with_mem(record, position=0)
+        bk.get_record_parts_conditional(0x0085)
+        # 4 bytes header + 3 bytes data
+        assert bk._position == 7
+
+    def test_matching_code_empty_data(self):
+        """Matching record with zero-length data returns empty bytes."""
+        record = self._make_record(0x000A, b'')
+        bk = self._make_book_with_mem(record)
+        result = bk.get_record_parts_conditional(0x000A)
+        assert result == (0x000A, 0, b'')
+
+    def test_matching_code_with_offset(self):
+        """Method reads from the current _position, not from the start of mem."""
+        prefix = b'\xFF' * 6  # 6 bytes of noise before the record
+        data = b'\x11\x22'
+        record = self._make_record(0x0100, data)
+        bk = self._make_book_with_mem(prefix + record, position=6)
+        result = bk.get_record_parts_conditional(0x0100)
+        assert result == (0x0100, 2, data)
+        assert bk._position == 6 + 4 + 2
