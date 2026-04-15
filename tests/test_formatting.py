@@ -1479,3 +1479,151 @@ def test_handle_style_blah_logging_builtin():
     log = book.logfile.getvalue()
     assert "STYLE:" in log
     assert "built_in=1" in log
+
+
+# ===== handle_font additional coverage =====
+
+def _make_font_data_biff34(height=200, options=0, colour_index=8, name='Arial'):
+    """Build a BIFF3/4 FONT record data bytes."""
+    name_bytes = name.encode('ascii')
+    data = struct.pack('<HHH', height, options, colour_index)
+    data += struct.pack('B', len(name_bytes))
+    data += name_bytes
+    return data
+
+
+def _make_font_data_biff2(height=200, options=0, name='Arial'):
+    """Build a BIFF2 FONT record data bytes."""
+    name_bytes = name.encode('ascii')
+    data = struct.pack('<HH', height, options)
+    data += struct.pack('B', len(name_bytes))
+    data += name_bytes
+    return data
+
+
+def test_handle_font_derives_encoding_when_none():
+    """Line 266: derive_encoding() is called when book.encoding is falsy."""
+    book = MockBook(biff_version=80, formatting_info=True)
+    book.encoding = None
+    data = _make_font_data_biff8(height=200, name='Arial')
+    handle_font(book, data)
+    assert book.encoding == 'ascii'
+    assert len(book.font_list) == 1
+
+
+def test_handle_font_biff34_basic():
+    """Lines 295-303: BIFF3/4 branch parses height, options, colour_index, name."""
+    book = MockBook(biff_version=30, formatting_info=True)
+    data = _make_font_data_biff34(height=240, options=0, colour_index=5, name='Times')
+    handle_font(book, data)
+    assert len(book.font_list) == 1
+    f = book.font_list[0]
+    assert f.height == 240
+    assert f.colour_index == 5
+    assert f.name == 'Times'
+
+
+def test_handle_font_biff34_option_flags():
+    """Lines 297-302: BIFF3/4 option flags are parsed correctly."""
+    # bold=1, italic=1 => options = 0b11 = 3
+    book = MockBook(biff_version=40, formatting_info=True)
+    data = _make_font_data_biff34(height=200, options=3, name='Arial')
+    handle_font(book, data)
+    f = book.font_list[0]
+    assert f.bold == 1
+    assert f.italic == 1
+    assert f.underlined == 0
+    assert f.struck_out == 0
+    assert f.outline == 0
+    assert f.shadow == 0
+
+
+def test_handle_font_biff34_cooked_attributes():
+    """Lines 305-309: BIFF3/4 cooks up weight, escapement, underline_type, family, character_set."""
+    # bold=1 => options & 1 = 1
+    book = MockBook(biff_version=30, formatting_info=True)
+    data = _make_font_data_biff34(height=200, options=1, name='Arial')
+    handle_font(book, data)
+    f = book.font_list[0]
+    assert f.weight == 700
+    assert f.escapement == 0
+    assert f.underline_type == f.underlined
+    assert f.family == 0
+    assert f.character_set == 1
+
+
+def test_handle_font_biff34_not_bold_weight():
+    """Line 305: non-bold font gets weight 400 in BIFF3/4."""
+    book = MockBook(biff_version=30, formatting_info=True)
+    data = _make_font_data_biff34(height=200, options=0, name='Arial')
+    handle_font(book, data)
+    f = book.font_list[0]
+    assert f.weight == 400
+
+
+def test_handle_font_biff2_basic():
+    """Lines 311-319: BIFF2 branch parses height, options, name."""
+    book = MockBook(biff_version=20, formatting_info=True)
+    data = _make_font_data_biff2(height=180, options=0, name='Courier')
+    handle_font(book, data)
+    assert len(book.font_list) == 1
+    f = book.font_list[0]
+    assert f.height == 180
+    assert f.name == 'Courier'
+    assert f.colour_index == 0x7FFF
+
+
+def test_handle_font_biff2_option_flags():
+    """Lines 313-318: BIFF2 option flags and fixed attributes."""
+    # italic=1, underlined=1 => options = 0b110 = 6
+    book = MockBook(biff_version=20, formatting_info=True)
+    data = _make_font_data_biff2(height=200, options=6, name='Arial')
+    handle_font(book, data)
+    f = book.font_list[0]
+    assert f.bold == 0
+    assert f.italic == 1
+    assert f.underlined == 1
+    assert f.struck_out == 0
+    assert f.outline == 0
+    assert f.shadow == 0
+
+
+def test_handle_font_biff2_cooked_attributes():
+    """Lines 321-325: BIFF2 cooks up weight, escapement, underline_type, family, character_set."""
+    # bold=1 => options & 1 = 1
+    book = MockBook(biff_version=20, formatting_info=True)
+    data = _make_font_data_biff2(height=200, options=1, name='Arial')
+    handle_font(book, data)
+    f = book.font_list[0]
+    assert f.weight == 700
+    assert f.escapement == 0
+    assert f.underline_type == f.underlined
+    assert f.family == 0
+    assert f.character_set == 1
+
+
+def test_handle_font_biff8_verbosity_blah_logs():
+    """Lines 326-327: when verbosity >= 2, font.dump() is called and logs output."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=2)
+    data = _make_font_data_biff8(height=200, name='Arial')
+    handle_font(book, data)
+    log = book.logfile.getvalue()
+    assert 'handle_font' in log
+
+
+def test_handle_font_biff34_verbosity_blah_logs():
+    """Lines 326-327: when verbosity >= 2 for BIFF3/4, font.dump() logs output."""
+    book = MockBook(biff_version=30, formatting_info=True, verbosity=2)
+    data = _make_font_data_biff34(height=200, name='Arial')
+    handle_font(book, data)
+    log = book.logfile.getvalue()
+    assert 'handle_font' in log
+
+
+def test_handle_font_biff2_verbosity_blah_logs():
+    """Lines 326-327: when verbosity >= 2 for BIFF2, font.dump() logs output."""
+    book = MockBook(biff_version=20, formatting_info=True, verbosity=2)
+    data = _make_font_data_biff2(height=200, name='Arial')
+    handle_font(book, data)
+    log = book.logfile.getvalue()
+    assert 'handle_font' in log
