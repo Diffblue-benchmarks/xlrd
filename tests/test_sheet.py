@@ -622,3 +622,63 @@ class TestUnpackRK:
         rk = pack('<i', 0 | 2)
         result = unpack_RK(rk)
         assert result == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Sheet.handle_hlink / get_nul_terminated_unicode
+# ---------------------------------------------------------------------------
+
+def _make_hlink_header(options):
+    """Build the 32-byte header for a hyperlink record."""
+    import struct
+    guid0 = b"\xD0\xC9\xEA\x79\xF9\xBA\xCE\x11\x8C\x82\x00\xAA\x00\x4B\xA9\x0B"
+    dummy = b"\x02\x00\x00\x00"
+    return struct.pack('<HHHH16s4si', 0, 0, 0, 0, guid0, dummy, options)
+
+
+def _nul_terminated_unicode_field(text):
+    """Encode text (without NUL) as a NUL-terminated UTF-16le field with 4-byte length prefix."""
+    import struct
+    text_with_nul = text + '\x00'
+    encoded = text_with_nul.encode('UTF-16le')
+    count = len(text_with_nul)  # number of characters including NUL
+    return struct.pack('<L', count) + encoded
+
+
+class TestHandleHlinkGetNulTerminatedUnicode:
+    def test_description_parsed_from_hlink(self, sheet):
+        """handle_hlink with description option invokes get_nul_terminated_unicode."""
+        options = 0x04  # has description; workbook link type; no textmark
+        header = _make_hlink_header(options)
+        desc_field = _nul_terminated_unicode_field('MyDescription')
+        data = header + desc_field
+
+        sheet.handle_hlink(data)
+
+        assert len(sheet.hyperlink_list) == 1
+        assert sheet.hyperlink_list[0].desc == 'MyDescription'
+
+    def test_target_parsed_from_hlink(self, sheet):
+        """handle_hlink with target option invokes get_nul_terminated_unicode for target."""
+        options = 0x80  # has target; no description; no moniker; workbook type
+        header = _make_hlink_header(options)
+        target_field = _nul_terminated_unicode_field('TargetFrame')
+        data = header + target_field
+
+        sheet.handle_hlink(data)
+
+        assert len(sheet.hyperlink_list) == 1
+        assert sheet.hyperlink_list[0].target == 'TargetFrame'
+
+    def test_description_and_target_both_parsed(self, sheet):
+        """handle_hlink with both description and target bits reads both strings."""
+        options = 0x84  # has description (0x04) + has target (0x80)
+        header = _make_hlink_header(options)
+        desc_field = _nul_terminated_unicode_field('Desc')
+        target_field = _nul_terminated_unicode_field('Frame')
+        data = header + desc_field + target_field
+
+        sheet.handle_hlink(data)
+
+        assert sheet.hyperlink_list[0].desc == 'Desc'
+        assert sheet.hyperlink_list[0].target == 'Frame'
