@@ -1,5 +1,9 @@
 /build
 /dist
+.venv/
+venv/
+__pycache__/
+*.pyc
 *.egg-info
 build/
 _build/
