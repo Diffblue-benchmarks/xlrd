@@ -348,6 +348,105 @@ def test_handle_format_increments_count():
     assert book.actualfmtcount == 1
 
 
+def test_handle_format_xl_format2_rectype():
+    """Lines 529, 536, 537, 538, 543: XL_FORMAT2 rectype caps bv to 30, strpos=0."""
+    from xlrd.biffh import XL_FORMAT2
+    book = MockBook(biff_version=80, formatting_info=True)
+    fmt_str = '0.00'
+    # strpos=0 for bv<=30: string starts at beginning of data
+    data = struct.pack('B', len(fmt_str)) + fmt_str.encode('ascii')
+    handle_format(book, data, XL_FORMAT2)
+    # fmtkey = actualfmtcount before increment = 0
+    assert 0 in book.format_map
+    assert book.format_map[0].format_str == fmt_str
+
+
+def test_handle_format_derive_encoding_called():
+    """Line 531: derive_encoding is called when self.encoding is falsy."""
+    from xlrd.biffh import XL_FORMAT
+    book = MockBook(biff_version=80, formatting_info=True)
+    book.encoding = None
+    fmtkey = 200
+    fmt_str = '0.00'
+    key_bytes = struct.pack('<H', fmtkey)
+    str_bytes = struct.pack('<H', len(fmt_str)) + b'\x00' + fmt_str.encode('ascii')
+    data = key_bytes + str_bytes
+    handle_format(book, data, XL_FORMAT)
+    assert book.encoding == 'ascii'
+    assert fmtkey in book.format_map
+
+
+def test_handle_format_biff5():
+    """Lines 536, 543: BIFF5 uses fmtkey from data and unpack_string with strpos=2."""
+    from xlrd.biffh import XL_FORMAT
+    book = MockBook(biff_version=50, formatting_info=True)
+    fmtkey = 200
+    fmt_str = '0.00'
+    key_bytes = struct.pack('<H', fmtkey)
+    str_bytes = struct.pack('B', len(fmt_str)) + fmt_str.encode('ascii')
+    data = key_bytes + str_bytes
+    handle_format(book, data, XL_FORMAT)
+    assert fmtkey in book.format_map
+    assert book.format_map[fmtkey].format_str == fmt_str
+
+
+def test_handle_format_biff4():
+    """Lines 536, 537, 543: BIFF4 (bv<50) uses actualfmtcount as fmtkey, strpos=2."""
+    from xlrd.biffh import XL_FORMAT
+    book = MockBook(biff_version=40, formatting_info=True)
+    fmt_str = '0.00'
+    # bv=40 > 30, so strpos=2; fmtkey = actualfmtcount = 0
+    data = b'\x00\x00' + struct.pack('B', len(fmt_str)) + fmt_str.encode('ascii')
+    handle_format(book, data, XL_FORMAT)
+    assert 0 in book.format_map
+    assert book.format_map[0].format_str == fmt_str
+
+
+def test_handle_format_verbosity_blah_logging():
+    """Lines 546, 570: verbosity>=3 triggers blah logging and fmtobj.dump."""
+    from xlrd.biffh import XL_FORMAT
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=3)
+    fmtkey = 200
+    fmt_str = '0.00'
+    key_bytes = struct.pack('<H', fmtkey)
+    str_bytes = struct.pack('<H', len(fmt_str)) + b'\x00' + fmt_str.encode('ascii')
+    data = key_bytes + str_bytes
+    handle_format(book, data, XL_FORMAT)
+    log_output = book.logfile.getvalue()
+    assert 'FORMAT' in log_output
+    assert fmtkey in book.format_map
+
+
+def test_handle_format_std_format_code_types_lookup():
+    """Lines 555, 557: fmtkey<=163 and bv>=50 causes std_format_code_types lookup."""
+    from xlrd.biffh import XL_FORMAT
+    book = MockBook(biff_version=80, formatting_info=True)
+    fmtkey = 14  # standard date format key
+    fmt_str = 'dd/mm/yyyy'
+    key_bytes = struct.pack('<H', fmtkey)
+    str_bytes = struct.pack('<H', len(fmt_str)) + b'\x00' + fmt_str.encode('ascii')
+    data = key_bytes + str_bytes
+    handle_format(book, data, XL_FORMAT)
+    assert fmtkey in book.format_map
+    assert book.format_map[fmtkey].format_str == fmt_str
+
+
+def test_handle_format_conflict_warning():
+    """Lines 558-560, 565: conflict between std format type and format string triggers warning."""
+    from xlrd.biffh import XL_FORMAT
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    # fmtkey=14 is FDT (date) in std_format_code_types, but '#,##0' is not a date
+    fmtkey = 14
+    fmt_str = '#,##0'
+    key_bytes = struct.pack('<H', fmtkey)
+    str_bytes = struct.pack('<H', len(fmt_str)) + b'\x00' + fmt_str.encode('ascii')
+    data = key_bytes + str_bytes
+    handle_format(book, data, XL_FORMAT)
+    log_output = book.logfile.getvalue()
+    assert 'Conflict' in log_output or 'WARNING' in log_output
+    assert fmtkey in book.format_map
+
+
 # ===== handle_palette =====
 
 def _make_palette_data(colours):
