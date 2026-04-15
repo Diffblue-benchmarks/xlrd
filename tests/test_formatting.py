@@ -229,6 +229,32 @@ def test_is_date_format_string_ambiguous_returns_bool():
     assert isinstance(result, bool)
 
 
+def test_is_date_format_string_verbosity_4_prints_debug():
+    book = MockBook(verbosity=4)
+    result = is_date_format_string(book, 'dd/mm/yyyy')
+    assert result is True
+    assert 'is_date_format_string' in book.logfile.getvalue()
+
+
+def test_is_date_format_string_with_separator():
+    book = MockBook()
+    result = is_date_format_string(book, '0;0')
+    assert result is False
+
+
+def test_is_date_format_string_constant_result_no_verbosity():
+    book = MockBook(verbosity=0)
+    result = is_date_format_string(book, 'ABCFG')
+    assert result is False
+
+
+def test_is_date_format_string_constant_result_with_verbosity():
+    book = MockBook(verbosity=1)
+    result = is_date_format_string(book, 'ABCFG')
+    assert result is False
+    assert 'constant result' in book.logfile.getvalue()
+
+
 # ===== handle_efont =====
 
 def test_handle_efont_no_formatting_info():
