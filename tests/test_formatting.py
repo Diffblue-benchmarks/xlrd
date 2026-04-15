@@ -601,3 +601,134 @@ def test_initialise_book_sets_xf_epilogue_done():
     book = MockBook(biff_version=80, formatting_info=True)
     initialise_book(book)
     assert book._xf_epilogue_done == 0
+
+
+# ===== xf_epilogue: additional coverage =====
+
+def test_xf_epilogue_blah_logging():
+    """Line 1023: verbose logging when verbosity >= 3."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=3)
+    fill_in_standard_formats(book)
+    data = _make_xf_data_biff8(pkd_type_par=0x0004)
+    handle_xf(book, data)
+    xf_epilogue(book)
+    assert "xf_epilogue called" in book.logfile.getvalue()
+
+
+def test_xf_epilogue_keyerror_format_key():
+    """Lines 1038-1039: format_key not in format_map yields XL_CELL_TEXT."""
+    from xlrd.biffh import XL_CELL_TEXT
+    book = MockBook(biff_version=80, formatting_info=True)
+    fill_in_standard_formats(book)
+    data = _make_xf_data_biff8()
+    handle_xf(book, data)
+    book.xf_list[0].format_key = 9999
+    xf_epilogue(book)
+    assert book._xf_index_to_xl_type_map[0] == XL_CELL_TEXT
+
+
+def test_xf_epilogue_no_formatting_info_continues():
+    """Line 1043: continue when not formatting_info."""
+    book = MockBook(biff_version=80, formatting_info=False)
+    fill_in_standard_formats(book)
+    data = _make_xf_data_biff8(pkd_type_par=0x0000)
+    handle_xf(book, data)
+    xf_epilogue(book)
+    assert book._xf_epilogue_done == 1
+
+
+def test_xf_epilogue_invalid_parent_style_index_blah1():
+    """Lines 1047-1048, 1052: invalid parent_style_index corrected with warning."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # is_style=0, parent_style_index=1; but only 1 XF exists → out of range
+    data = _make_xf_data_biff8(pkd_type_par=0x0010)
+    handle_xf(book, data)
+    xf_epilogue(book)
+    assert book.xf_list[0].parent_style_index == 0
+    assert "parent_style_index" in book.logfile.getvalue()
+
+
+def test_xf_epilogue_parent_style_self_reference():
+    """Lines 1055-1056: parent_style_index equals xf_index."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # style XF at index 0
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0004))
+    # cell XF at index 1, parent_style_index=1 (same as xf_index)
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0010))
+    xf_epilogue(book)
+    assert "parent_style_index is also" in book.logfile.getvalue()
+
+
+def test_xf_epilogue_parent_not_style():
+    """Lines 1059-1060: parent XF has style flag not set."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # Two cell XFs (is_style=0); xf[1] parent=0; xf[0] is not a style
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0000))
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0000))
+    xf_epilogue(book)
+    assert "style flag not set" in book.logfile.getvalue()
+
+
+def test_xf_epilogue_parent_out_of_order():
+    """Line 1064: parent_style_index > xf_index."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # style XF at index 0
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0004))
+    # cell XF at index 1, parent_style_index=2 (> xf_index=1)
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0020))
+    # style XF at index 2
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0004))
+    xf_epilogue(book)
+    assert "out of order" in book.logfile.getvalue()
+
+
+def test_xf_epilogue_check_same_different_alignment():
+    """Lines 1027-1028, 1069: check_same logs when alignment differs."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # style XF at index 0, hor_align=0, all flags=0
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0004, pkd_align1=0x00, pkd_used=0x00))
+    # cell XF at index 1, hor_align=1 (differs from parent), all flags=0
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0000, pkd_align1=0x01, pkd_used=0x00))
+    xf_epilogue(book)
+    assert "alignment different" in book.logfile.getvalue()
+
+
+def test_xf_epilogue_check_same_all_attrs():
+    """Lines 1069, 1071, 1073, 1075: check_same called for all attribute types."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # style XF at index 0, all flags=0
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0004, pkd_used=0x00))
+    # cell XF at index 1, parent=0, all flags=0
+    handle_xf(book, _make_xf_data_biff8(pkd_type_par=0x0000, pkd_used=0x00))
+    xf_epilogue(book)
+    assert book._xf_epilogue_done == 1
+
+
+def test_xf_epilogue_format_key_mismatch():
+    """Lines 1077-1078: format_key differs from parent with _format_flag=0."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # style XF, format_key=0, _format_flag=0
+    handle_xf(book, _make_xf_data_biff8(format_key=0, pkd_type_par=0x0004, pkd_used=0x00))
+    # cell XF, format_key=0x0e (differs from parent), _format_flag=0
+    handle_xf(book, _make_xf_data_biff8(format_key=0x0e, pkd_type_par=0x0000, pkd_used=0x00))
+    xf_epilogue(book)
+    assert "fmtk=" in book.logfile.getvalue()
+
+
+def test_xf_epilogue_font_index_mismatch():
+    """Lines 1084-1085: font_index differs from parent with _font_flag=0."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # style XF, font_index=0, _font_flag=0
+    handle_xf(book, _make_xf_data_biff8(font_index=0, pkd_type_par=0x0004, pkd_used=0x00))
+    # cell XF, font_index=1 (differs from parent), _font_flag=0
+    handle_xf(book, _make_xf_data_biff8(font_index=1, pkd_type_par=0x0000, pkd_used=0x00))
+    xf_epilogue(book)
+    assert "fontx=" in book.logfile.getvalue()
