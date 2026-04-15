@@ -240,6 +240,42 @@ def test_locate_named_stream_not_found(valid_mem):
     assert result == (None, 0, 0)
 
 
+def test_locate_named_stream_size_exceeds_file_data(valid_mem):
+    """Line 395: raises CompDocError when stream tot_size > mem_data_len."""
+    doc = CompDoc(valid_mem)
+    doc.dirlist[1].tot_size = doc.mem_data_len + 1
+    with pytest.raises(CompDocError, match="stream length"):
+        doc.locate_named_stream('Workbook')
+
+
+def test_locate_named_stream_debug_prints_seen(valid_mem):
+    """Lines 402-403: DEBUG mode logs 'seen' after locating a large stream."""
+    f = io.StringIO()
+    doc = CompDoc(valid_mem, logfile=f)
+    doc.DEBUG = 1
+    doc.locate_named_stream('Workbook')
+    output = f.getvalue()
+    assert 'seen' in output
+
+
+def test_locate_named_stream_small_stream_via_sscs(valid_mem):
+    """Line 406: stream below min_size_std_stream is read from SSCS."""
+    doc = CompDoc(valid_mem)
+    small_data = b'smalldata'
+    dent = make_dir_entry('SmallStream', etype=2, first_SID=0, tot_size=len(small_data))
+    small_node = DirNode(len(doc.dirlist), dent)
+    doc.dirlist.append(small_node)
+    doc.dirlist[0].children.append(len(doc.dirlist) - 1)
+    small_node.parent = 0
+    doc.SSCS = small_data + b'\x00' * (doc.short_sec_size - len(small_data))
+    doc.SSAT = [EOCSID] + [FREESID] * 10
+    doc.min_size_std_stream = 4096
+    result_mem, offset, size = doc.locate_named_stream('SmallStream')
+    assert size == len(small_data)
+    assert offset == 0
+    assert result_mem == small_data
+
+
 # === _dir_search edge cases ===
 
 def test_dir_search_not_found(compdoc):
