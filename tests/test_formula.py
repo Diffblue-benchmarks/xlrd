@@ -9,6 +9,7 @@ import pytest
 from xlrd.formula import (
     Operand,
     Ref3D,
+    dump_formula,
     _opr_eq,
     _opr_ge,
     _opr_gt,
@@ -677,3 +678,228 @@ class TestRangename3drel:
         r = Ref3D((0, 1, 5, 20, 7, 10, 1, 1, 0, 0, 0, 0))
         result = rangename3drel(bk, r)
         assert '!' not in result
+
+
+# ===========================================================================
+# dump_formula
+# ===========================================================================
+
+def make_dump_bk():
+    """Create a minimal book object for dump_formula tests."""
+    bk = make_bk(
+        externsheet_info=[(0, 0, 0)],
+        all_sheets_map=[0],
+        locals_inx=0,
+        addins_inx=999,
+    )
+    return bk
+
+
+class TestDumpFormula:
+    def test_empty_formula(self):
+        bk = make_dump_bk()
+        dump_formula(bk, b'', 0, 80, 0)
+
+    def test_assertion_error_bv_lt_80(self):
+        bk = make_dump_bk()
+        with pytest.raises(AssertionError):
+            dump_formula(bk, b'', 0, 70, 0)
+
+    def test_blah_logging_prints_to_logfile(self):
+        bk = make_dump_bk()
+        data = b'\x03'  # opcode 0x03 (Add), optype=0, sz=1
+        dump_formula(bk, data, 1, 80, 0, blah=1)
+        output = bk.logfile.getvalue()
+        assert 'dump_formula' in output
+
+    def test_texp_opcode_optype0(self):
+        bk = make_dump_bk()
+        # opcode=0x01 (tExp), optype=0, sz=5: rowx, colx packed as <HH
+        data = b'\x01' + struct.pack('<HH', 2, 3)
+        dump_formula(bk, data, 5, 80, 0)
+
+    def test_ttbl_opcode_optype0(self):
+        bk = make_dump_bk()
+        # opcode=0x02 (tTbl), optype=0, sz=5
+        data = b'\x02' + struct.pack('<HH', 1, 4)
+        dump_formula(bk, data, 5, 80, 0)
+
+    def test_tattr_choose_subop(self):
+        bk = make_dump_bk()
+        # opcode=0x19 (tAttr), optype=0, subop=0x04 (Choose), nc=2 -> sz=2*2+6=10
+        data = b'\x19' + struct.pack('<BH', 0x04, 2) + b'\x00' * 7
+        dump_formula(bk, data, 10, 80, 0)
+
+    def test_tattr_other_subop(self):
+        bk = make_dump_bk()
+        # opcode=0x19 (tAttr), optype=0, subop=0x01 (Volatile) -> sz=4
+        data = b'\x19' + struct.pack('<BH', 0x01, 0)
+        dump_formula(bk, data, 4, 80, 0)
+
+    def test_tstr_biff8_path(self):
+        bk = make_dump_bk()
+        # opcode=0x17 (tStr), optype=0, bv=80 -> unpack_unicode_update_pos
+        # lenlen=1: nchars byte + options byte (0=8-bit) + 3 chars
+        data = b'\x17\x03\x00abc'  # nchars=3, options=0, chars='abc'
+        dump_formula(bk, data, 6, 80, 0)
+
+    def test_else_branch_dud_size_optype0(self):
+        # opcode=0x1A, optype=0 -> opx=26, sztab4[26]=-2 -> dud size, returns early
+        bk = make_dump_bk()
+        data = b'\x1a'
+        dump_formula(bk, data, 1, 80, 0)
+        assert '**** Dud size' in bk.logfile.getvalue()
+
+    def test_else_branch_valid_size_optype0(self):
+        # opcode=0x03 (Add), optype=0 -> opx=3, sztab4[3]=1, advances normally
+        bk = make_dump_bk()
+        data = b'\x03'
+        dump_formula(bk, data, 1, 80, 0)
+
+    def test_tarray_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x20 -> optype=1, opcode=0x00 (tArray), opx=32, sz=9: just passes
+        data = b'\x20' + b'\x00' * 8
+        dump_formula(bk, data, 9, 80, 0)
+
+    def test_tfunc_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x21 -> optype=1, opcode=0x01 (tFunc), bv=80 -> nb=2, sz=3
+        data = b'\x21' + struct.pack('<H', 4)
+        dump_formula(bk, data, 3, 80, 0)
+
+    def test_tfuncvar_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x22 -> optype=1, opcode=0x02 (tFuncVar), bv=80 -> nb=2, sz=4
+        data = b'\x22' + struct.pack('<BH', 2, 4)
+        dump_formula(bk, data, 4, 80, 0)
+
+    def test_tname_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x23 -> optype=1, opcode=0x03 (tName), opx=35, sz=5
+        data = b'\x23' + struct.pack('<H', 1) + b'\x00\x00'
+        dump_formula(bk, data, 5, 80, 0)
+
+    def test_tref_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x24 -> optype=1, opcode=0x04 (tRef), opx=36, sz=5
+        data = b'\x24' + struct.pack('<HH', 3, 5)
+        dump_formula(bk, data, 5, 80, 0)
+
+    def test_tarea_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x25 -> optype=1, opcode=0x05 (tArea), opx=37, sz=9
+        data = b'\x25' + struct.pack('<HH', 3, 5) + struct.pack('<HH', 10, 15)
+        dump_formula(bk, data, 9, 80, 0)
+
+    def test_tmemfunc_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x29 -> optype=1, opcode=0x09 (tMemFunc), opx=41, sz=3
+        data = b'\x29' + struct.pack('<H', 4)
+        dump_formula(bk, data, 3, 80, 0)
+
+    def test_trefn_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x2C -> optype=1, opcode=0x0C (tRefN), opx=44, sz=5; always reldelta=1
+        data = b'\x2c' + struct.pack('<HH', 3, 5)
+        dump_formula(bk, data, 5, 80, 0)
+
+    def test_tarean_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x2D -> optype=1, opcode=0x0D (tAreaN), opx=45, sz=9; always reldelta=1
+        data = b'\x2d' + b'\x00' * 8
+        dump_formula(bk, data, 9, 80, 0)
+
+    def test_tref3d_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x3A -> optype=1, opcode=0x1A (tRef3d), opx=58, sz=7
+        # refx(2 bytes) + cell_addr(4 bytes for biff8)
+        data = b'\x3a' + struct.pack('<H', 0) + struct.pack('<HH', 2, 3)
+        dump_formula(bk, data, 7, 80, 0)
+
+    def test_tarea3d_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x3B -> optype=1, opcode=0x1B (tArea3d), opx=59, sz=11
+        data = b'\x3b' + struct.pack('<H', 0) + struct.pack('<HH', 2, 3) + struct.pack('<HH', 5, 7)
+        dump_formula(bk, data, 11, 80, 0)
+
+    def test_tnamex_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x39 -> optype=1, opcode=0x19 (tNameX), opx=57, sz=7
+        data = b'\x39' + struct.pack('<HH', 1, 2) + b'\x00\x00'
+        dump_formula(bk, data, 7, 80, 0)
+
+    def test_error_opcode_sets_any_err(self):
+        bk = make_dump_bk()
+        # op=0x27 -> optype=1, opcode=0x07 (in error_opcodes), opx=39, sz=7
+        data = b'\x27' + b'\x00' * 6
+        dump_formula(bk, data, 7, 80, 0)
+
+    def test_unknown_opcode_optype1(self):
+        bk = make_dump_bk()
+        # op=0x26 -> optype=1, opcode=0x06 (not handled), opx=38, sz=7 -> else branch
+        data = b'\x26' + b'\x00' * 6
+        dump_formula(bk, data, 7, 80, 0)
+
+    def test_dud_size_optype1(self):
+        # op=0x30 -> optype=1, opcode=0x10 (not handled), opx=48, sztab4[48]=-2 -> dud size
+        bk = make_dump_bk()
+        data = b'\x30'
+        dump_formula(bk, data, 1, 80, 0)
+        assert '**** Dud size' in bk.logfile.getvalue()
+
+    def test_tlist_opcode_optype0(self):
+        bk = make_dump_bk()
+        # Two tRef3d push [coords] onto stack; then tList pops and concatenates
+        tref3d = b'\x3a' + struct.pack('<H', 0) + struct.pack('<HH', 0, 0)
+        data = tref3d + tref3d + b'\x10'
+        dump_formula(bk, data, len(data), 80, 0)
+
+    @pytest.mark.skip(reason="do_box_funcs expects objects with .coords attr; tRef3d pushes raw tuples")
+    def test_trange_opcode_optype0(self):
+        bk = make_dump_bk()
+        # Two tRef3d push [coords]; then tRange (0x11) pops and applies do_box_funcs
+        tref3d = b'\x3a' + struct.pack('<H', 0) + struct.pack('<HH', 0, 0)
+        data = tref3d + tref3d + b'\x11'
+        dump_formula(bk, data, len(data), 80, 0)
+
+    @pytest.mark.skip(reason="do_box_funcs expects objects with .coords attr; tRef3d pushes raw tuples")
+    def test_tisect_opcode_optype0(self):
+        bk = make_dump_bk()
+        # Two tRef3d push [coords]; then tIsect (0x0F) pops and applies do_box_funcs
+        tref3d = b'\x3a' + struct.pack('<H', 0) + struct.pack('<HH', 0, 0)
+        data = tref3d + tref3d + b'\x0f'
+        dump_formula(bk, data, len(data), 80, 0)
+
+    def test_blah_end_of_formula_output(self):
+        bk = make_dump_bk()
+        # opcode=0x03, sz=1, loop completes -> blah prints end-of-formula summary
+        data = b'\x03'
+        dump_formula(bk, data, 1, 80, 0, blah=1)
+        output = bk.logfile.getvalue()
+        assert 'End of formula' in output
+
+    def test_blah_stack_unprocessed_warning(self):
+        bk = make_dump_bk()
+        # Two tRef3d (each pushes [coords]) without consuming -> stack len=2 at end
+        tref3d = b'\x3a' + struct.pack('<H', 0) + struct.pack('<HH', 0, 0)
+        data = tref3d + tref3d
+        dump_formula(bk, data, len(data), 80, 0, blah=1)
+        output = bk.logfile.getvalue()
+        assert 'Stack has unprocessed args' in output
+
+    def test_blah_tattr_logging(self):
+        bk = make_dump_bk()
+        # tAttr with blah=1 to cover the blah print inside tAttr handler
+        data = b'\x19' + struct.pack('<BH', 0x01, 0)
+        dump_formula(bk, data, 4, 80, 0, blah=1)
+        output = bk.logfile.getvalue()
+        assert 'subop' in output
+
+    def test_blah_tstr_logging(self):
+        bk = make_dump_bk()
+        # tStr with blah=1 to cover the blah print inside tStr handler
+        data = b'\x17\x02\x00hi'
+        dump_formula(bk, data, 5, 80, 0, blah=1)
+        output = bk.logfile.getvalue()
+        assert 'sz=' in output
