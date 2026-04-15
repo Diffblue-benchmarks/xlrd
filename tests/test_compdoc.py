@@ -323,3 +323,68 @@ def test_x_dump_line_equal():
     x_dump_line([10, 20, 30], 2, f, 0, equal=1)
     output = f.getvalue()
     assert '=' in output
+
+
+# === _locate_stream ===
+
+def test_locate_stream_negative_start_sid(compdoc):
+    """Line 418: raises CompDocError when start_sid is negative."""
+    with pytest.raises(CompDocError, match="_locate_stream: start_sid"):
+        compdoc._locate_stream(b'\x00' * 512, 0, [], 512, -1, 512, 'test', 1)
+
+
+def test_locate_stream_seen_corruption_raises(compdoc):
+    """Lines 427-429: raises CompDocError when sector already seen and corruption not ignored."""
+    mem = b'\x00' * (512 * 4)
+    sat = [EOCSID, FREESID, FREESID, FREESID]
+    compdoc.seen = [1, 0, 0, 0]
+    compdoc.ignore_workbook_corruption = False
+    f = io.StringIO()
+    compdoc.logfile = f
+    with pytest.raises(CompDocError, match="corruption: seen"):
+        compdoc._locate_stream(mem, 0, sat, 512, 0, 512, 'test', 2)
+
+
+def test_locate_stream_seen_corruption_ignored(compdoc):
+    """Line 427: when ignore_workbook_corruption is True, does not raise on seen sector."""
+    mem = b'\x00' * (512 * 4)
+    sat = [EOCSID, FREESID, FREESID, FREESID]
+    compdoc.seen = [1, 0, 0, 0]
+    compdoc.ignore_workbook_corruption = True
+    result = compdoc._locate_stream(mem, 0, sat, 512, 0, 512, 'test', 2)
+    assert result is not None
+    assert result[2] == 512
+
+
+def test_locate_stream_size_exceeds_expected(compdoc):
+    """Line 434: raises CompDocError when found sectors exceed expected size."""
+    mem = b'\x00' * (512 * 4)
+    sat = [1, EOCSID, FREESID, FREESID]
+    compdoc.seen = [0, 0, 0, 0]
+    with pytest.raises(CompDocError, match="size exceeds expected"):
+        compdoc._locate_stream(mem, 0, sat, 512, 0, 512, 'test', 1)
+
+
+def test_locate_stream_contiguous_sectors(compdoc):
+    """Line 440: contiguous sectors extend end_pos without creating new slices."""
+    mem = b'A' * (512 * 4)
+    sat = [1, 2, EOCSID, FREESID]
+    compdoc.seen = [0, 0, 0, 0]
+    result = compdoc._locate_stream(mem, 0, sat, 512, 0, 3 * 512, 'test', 1)
+    assert result[0] is mem
+    assert result[2] == 3 * 512
+
+
+def test_locate_stream_fragmented_sectors(compdoc):
+    """Lines 445, 456, 458: non-contiguous sectors produce joined bytes result."""
+    sector0 = b'A' * 512
+    sector1 = b'B' * 512
+    sector2 = b'C' * 512
+    sector3 = b'D' * 512
+    mem = sector0 + sector1 + sector2 + sector3
+    sat = [2, FREESID, EOCSID, FREESID]
+    compdoc.seen = [0, 0, 0, 0]
+    result = compdoc._locate_stream(mem, 0, sat, 512, 0, 2 * 512, 'test', 1)
+    assert result[1] == 0
+    assert result[2] == 2 * 512
+    assert result[0] == sector0 + sector2
