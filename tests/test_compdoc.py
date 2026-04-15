@@ -424,3 +424,70 @@ def test_locate_stream_fragmented_sectors(compdoc):
     assert result[1] == 0
     assert result[2] == 2 * 512
     assert result[0] == sector0 + sector2
+
+
+# === _get_stream ===
+
+def test_get_stream_no_size_basic(compdoc):
+    """Basic _get_stream with size=None reads full sectors until EOCSID."""
+    mem = b'A' * 512 + b'B' * 512
+    sat = [EOCSID, EOCSID]
+    result = compdoc._get_stream(mem, 0, sat, 512, 0)
+    assert result == b'A' * 512
+
+
+def test_get_stream_no_size_seen_corruption_raises(compdoc):
+    """Line 294: _get_stream raises CompDocError when seen sector encountered (size=None)."""
+    import array as _array
+    mem = b'A' * 512
+    sat = [EOCSID]
+    compdoc.seen = _array.array('B', [1])  # sector 0 already seen
+    with pytest.raises(CompDocError, match="corruption: seen"):
+        compdoc._get_stream(mem, 0, sat, 512, 0, name='TestStream', seen_id=2)
+
+
+def test_get_stream_no_size_index_error_raises(compdoc):
+    """Lines 300-301: _get_stream raises CompDocError on SAT IndexError (size=None)."""
+    mem = b'A' * 512
+    sat = []  # empty SAT causes IndexError on sat[0]
+    with pytest.raises(CompDocError, match="sector allocation table invalid entry"):
+        compdoc._get_stream(mem, 0, sat, 512, 0)
+
+
+def test_get_stream_with_size_seen_corruption_raises(compdoc):
+    """Line 311: _get_stream raises CompDocError when seen sector encountered (with size)."""
+    import array as _array
+    mem = b'A' * 512
+    sat = [EOCSID]
+    compdoc.seen = _array.array('B', [1])  # sector 0 already seen
+    with pytest.raises(CompDocError, match="corruption: seen"):
+        compdoc._get_stream(mem, 0, sat, 512, 0, size=512, name='TestStream', seen_id=2)
+
+
+def test_get_stream_with_size_partial_sector(compdoc):
+    """Line 316: _get_stream grabs only 'todo' bytes when smaller than sec_size."""
+    mem = b'Z' * 512
+    sat = [EOCSID]
+    result = compdoc._get_stream(mem, 0, sat, 512, 0, size=100)
+    assert result == b'Z' * 100
+
+
+def test_get_stream_with_size_index_error_raises(compdoc):
+    """Lines 321-322: _get_stream raises CompDocError on SAT IndexError (with size)."""
+    mem = b'A' * 512
+    sat = []  # empty SAT causes IndexError on sat[0]
+    with pytest.raises(CompDocError, match="sector allocation table invalid entry"):
+        compdoc._get_stream(mem, 0, sat, 512, 0, size=512)
+
+
+def test_get_stream_with_size_todo_nonzero_warning(compdoc):
+    """Line 328: _get_stream logs WARNING when actual data is smaller than expected size."""
+    mem = b'A' * 512
+    sat = [EOCSID]
+    f = io.StringIO()
+    compdoc.logfile = f
+    # Request 1024 bytes but only one sector (512 bytes) available
+    result = compdoc._get_stream(mem, 0, sat, 512, 0, size=1024)
+    assert result == b'A' * 512
+    output = f.getvalue()
+    assert 'WARNING' in output
