@@ -510,6 +510,37 @@ class TestComputedColumnWidth:
         sh.defcolwidth = 5
         assert sh.computed_column_width(0) == 5 * 256
 
+    def test_biff4x_gcw_true_standardwidth(self, fmt_book):
+        fmt_book.biff_version = 40
+        sh = Sheet(fmt_book, 0, 'S', 0)
+        sh.gcw = tuple([1] * 256)
+        sh.standardwidth = 2048
+        assert sh.computed_column_width(0) == 2048
+
+    def test_biff4x_gcw_true_no_standardwidth_falls_through(self, fmt_book):
+        fmt_book.biff_version = 40
+        sh = Sheet(fmt_book, 0, 'S', 0)
+        sh.gcw = tuple([1] * 256)
+        sh.standardwidth = None
+        sh.defcolwidth = 7
+        assert sh.computed_column_width(0) == 7 * 256
+
+    def test_biff4x_gcw_false_colinfo_width(self, fmt_book):
+        fmt_book.biff_version = 40
+        sh = Sheet(fmt_book, 0, 'S', 0)
+        sh.gcw = tuple([0] * 256)
+        ci = Colinfo()
+        ci.width = 3000
+        sh.colinfo_map[0] = ci
+        assert sh.computed_column_width(0) == 3000
+
+    def test_biff4x_gcw_false_no_colinfo_falls_through(self, fmt_book):
+        fmt_book.biff_version = 40
+        sh = Sheet(fmt_book, 0, 'S', 0)
+        sh.gcw = tuple([0] * 256)
+        sh.defcolwidth = 6
+        assert sh.computed_column_width(0) == 6 * 256
+
 
 # ---------------------------------------------------------------------------
 # Rowinfo tests
