@@ -1234,3 +1234,55 @@ def test_handle_xf_biff8_unknown_format_key_with_verbosity():
     assert xf.format_key == 0
     log = book.logfile.getvalue()
     assert "unknown (raw) format key" in log
+
+
+# ===== handle_style additional coverage =====
+
+def test_handle_style_unicode_decode_error(mocker):
+    """Lines 662-666: UnicodeDecodeError in unpack_unicode is logged and re-raised."""
+    book = MockBook(biff_version=80, formatting_info=True)
+    name = "MyStyle"
+    name_bytes = name.encode('utf-16-le')
+    str_data = struct.pack('<H', len(name)) + b'\x01' + name_bytes
+    data = struct.pack('<H', 0x0000)[:2] + str_data
+    mocker.patch('xlrd.formatting.unpack_unicode', side_effect=UnicodeDecodeError('utf-16-le', b'', 0, 1, 'reason'))
+    with pytest.raises(UnicodeDecodeError):
+        handle_style(book, data)
+    log = book.logfile.getvalue()
+    assert "STYLE:" in log
+    assert "raw bytes:" in log
+
+
+def test_handle_style_user_defined_old_biff_version():
+    """Line 668: user-defined style with biff version < 80 uses unpack_string."""
+    book = MockBook(biff_version=70, formatting_info=True)
+    book.encoding = 'ascii'
+    name = "OldStyle"
+    flag_and_xfx = 0x0001  # user-defined (no 0x8000 bit)
+    name_bytes = name.encode('ascii')
+    data = struct.pack('<H', flag_and_xfx) + bytes([len(name)]) + name_bytes
+    handle_style(book, data)
+    assert 'OldStyle' in book.style_name_map
+    assert book.style_name_map['OldStyle'] == (0, flag_and_xfx & 0x0fff)
+
+
+def test_handle_style_user_defined_empty_name_blah(mocker):
+    """Line 670: user-defined style with empty name and blah=True logs warning."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=2)
+    # empty name: length=0 at offset 2 with lenlen=2
+    flag_and_xfx = 0x0001
+    data = struct.pack('<H', flag_and_xfx) + struct.pack('<H', 0)
+    handle_style(book, data)
+    log = book.logfile.getvalue()
+    assert "WARNING" in log
+    assert "zero-length name" in log
+
+
+def test_handle_style_blah_logging_builtin():
+    """Line 673: fprintf is called when blah=True (verbosity >= 2)."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=2)
+    data = struct.pack('<HBB', 0x8000, 0, 255)  # built-in Normal
+    handle_style(book, data)
+    log = book.logfile.getvalue()
+    assert "STYLE:" in log
+    assert "built_in=1" in log
