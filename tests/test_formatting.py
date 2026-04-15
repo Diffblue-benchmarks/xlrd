@@ -732,3 +732,505 @@ def test_xf_epilogue_font_index_mismatch():
     handle_xf(book, _make_xf_data_biff8(font_index=1, pkd_type_par=0x0000, pkd_used=0x00))
     xf_epilogue(book)
     assert "fontx=" in book.logfile.getvalue()
+
+
+# ===== handle_xf (BIFF5 / bv >= 50) =====
+
+def _make_xf_data_biff5(font_index=0, format_key=0, pkd_type_par=0,
+                          pkd_align1=0, pkd_orient_used=0,
+                          pkd_brdbkg1=0, pkd_brdbkg2=0):
+    return struct.pack('<HHHBBIi',
+                       font_index, format_key, pkd_type_par,
+                       pkd_align1, pkd_orient_used,
+                       pkd_brdbkg1, pkd_brdbkg2)
+
+
+def test_handle_xf_biff5_creates_xf():
+    book = MockBook(biff_version=50, formatting_info=True)
+    data = _make_xf_data_biff5()
+    handle_xf(book, data)
+    assert len(book.xf_list) == 1
+    assert book.xfcount == 1
+
+
+def test_handle_xf_biff5_protection_flags():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # cell_locked=1, formula_hidden=1
+    pkd_type_par = 0x03
+    data = _make_xf_data_biff5(pkd_type_par=pkd_type_par)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.protection.cell_locked == 1
+    assert xf.protection.formula_hidden == 1
+
+
+def test_handle_xf_biff5_is_style():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # is_style = bit 2 of pkd_type_par
+    data = _make_xf_data_biff5(pkd_type_par=0x0004)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.is_style == 1
+
+
+def test_handle_xf_biff5_alignment_fields():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # hor_align=3, text_wrapped=1, vert_align=2 -> pkd_align1 = 3 | (1<<3) | (2<<4) = 3|8|32 = 43
+    pkd_align1 = 3 | (1 << 3) | (2 << 4)
+    data = _make_xf_data_biff5(pkd_align1=pkd_align1)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.alignment.hor_align == 3
+    assert xf.alignment.text_wrapped == 1
+    assert xf.alignment.vert_align == 2
+
+
+def test_handle_xf_biff5_orientation_rotation():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # orientation bits 0-1 of pkd_orient_used; [0,255,90,180]
+    for orient, expected_rotation in enumerate([0, 255, 90, 180]):
+        book2 = MockBook(biff_version=50, formatting_info=True)
+        data = _make_xf_data_biff5(pkd_orient_used=orient)
+        handle_xf(book2, data)
+        xf = book2.xf_list[0]
+        assert xf.alignment.rotation == expected_rotation
+
+
+def test_handle_xf_biff5_attr_flags():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # pkd_orient_used bits 2+ -> reg; attr flags for 6 stems
+    # set all 6 bits of reg: pkd_orient_used = 0b11111100 = 0xFC (upper 6 bits shifted by 2)
+    pkd_orient_used = 0xFC
+    data = _make_xf_data_biff5(pkd_orient_used=pkd_orient_used)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf._format_flag == 1
+    assert xf._font_flag == 1
+    assert xf._alignment_flag == 1
+    assert xf._border_flag == 1
+    assert xf._background_flag == 1
+    assert xf._protection_flag == 1
+
+
+def test_handle_xf_biff5_background_colour_indexes():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # pkd_brdbkg1 bits 0-6: pattern_colour_index, bits 7-13: background_colour_index
+    pkd_brdbkg1 = (8 | (9 << 7))  # pattern=8, background=9
+    data = _make_xf_data_biff5(pkd_brdbkg1=pkd_brdbkg1)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.background.pattern_colour_index == 8
+    assert xf.background.background_colour_index == 9
+
+
+def test_handle_xf_biff5_border_fields():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # pkd_brdbkg1 bits 22-24: bottom_line_style=3, bits 25-31: bottom_colour_index=5
+    pkd_brdbkg1 = (3 << 22) | (5 << 25)
+    data = _make_xf_data_biff5(pkd_brdbkg1=pkd_brdbkg1)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.border.bottom_line_style == 3
+    assert xf.border.bottom_colour_index == 5
+
+
+def test_handle_xf_biff5_border_brdbkg2():
+    book = MockBook(biff_version=50, formatting_info=True)
+    # pkd_brdbkg2 bits 0-2: top_line_style=2
+    pkd_brdbkg2 = 2
+    data = _make_xf_data_biff5(pkd_brdbkg2=pkd_brdbkg2)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.border.top_line_style == 2
+
+
+def test_handle_xf_biff5_verbosity_warning():
+    """Lines 1006-1007: is_style=1 with verbosity and parent_style_index != 0x0FFF."""
+    book = MockBook(biff_version=50, formatting_info=True, verbosity=1)
+    # is_style=1 (bit2), parent_style_index=0 (bits 4-15 = 0)
+    data = _make_xf_data_biff5(pkd_type_par=0x0004)
+    handle_xf(book, data)
+    log = book.logfile.getvalue()
+    assert "parent_style_index" in log
+
+
+def test_handle_xf_biff5_unknown_format_key():
+    """Lines 999-1000, 1010-1014: format_key not in format_map."""
+    book = MockBook(biff_version=50, formatting_info=True, verbosity=1)
+    # format_key=9999 is not in format_map even after fill_in_standard_formats
+    data = _make_xf_data_biff5(format_key=9999)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    # format_key should be reset to 0
+    assert xf.format_key == 0
+    log = book.logfile.getvalue()
+    assert "unknown (raw) format key" in log
+
+
+# ===== handle_xf (BIFF4 / bv >= 40) =====
+
+def _make_xf_data_biff4(font_index=0, format_key=0, pkd_type_par=0,
+                          pkd_align_orient=0, pkd_used=0xFC,
+                          pkd_bkg_34=0, pkd_brd_34=0):
+    return struct.pack('<BBHBBHI',
+                       font_index, format_key, pkd_type_par,
+                       pkd_align_orient, pkd_used,
+                       pkd_bkg_34, pkd_brd_34)
+
+
+def test_handle_xf_biff4_creates_xf():
+    book = MockBook(biff_version=40, formatting_info=True)
+    data = _make_xf_data_biff4()
+    handle_xf(book, data)
+    assert len(book.xf_list) == 1
+    assert book.xfcount == 1
+
+
+def test_handle_xf_biff4_protection_flags():
+    book = MockBook(biff_version=40, formatting_info=True)
+    pkd_type_par = 0x03
+    data = _make_xf_data_biff4(pkd_type_par=pkd_type_par)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.protection.cell_locked == 1
+    assert xf.protection.formula_hidden == 1
+
+
+def test_handle_xf_biff4_is_style():
+    book = MockBook(biff_version=40, formatting_info=True)
+    data = _make_xf_data_biff4(pkd_type_par=0x0004)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.is_style == 1
+
+
+def test_handle_xf_biff4_alignment_fields():
+    book = MockBook(biff_version=40, formatting_info=True)
+    # hor_align=2, text_wrapped=1, vert_align=1 -> bits 0-2, 3, 4-5
+    pkd_align_orient = 2 | (1 << 3) | (1 << 4)
+    data = _make_xf_data_biff4(pkd_align_orient=pkd_align_orient)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.alignment.hor_align == 2
+    assert xf.alignment.text_wrapped == 1
+    assert xf.alignment.vert_align == 1
+
+
+def test_handle_xf_biff4_orientation_rotation():
+    book = MockBook(biff_version=40, formatting_info=True)
+    # bits 6-7 of pkd_align_orient -> orientation; [0, 255, 90, 180]
+    for orient, expected in enumerate([0, 255, 90, 180]):
+        book2 = MockBook(biff_version=40, formatting_info=True)
+        pkd_align_orient = orient << 6
+        data = _make_xf_data_biff4(pkd_align_orient=pkd_align_orient)
+        handle_xf(book2, data)
+        assert book2.xf_list[0].alignment.rotation == expected
+
+
+def test_handle_xf_biff4_attr_flags():
+    book = MockBook(biff_version=40, formatting_info=True)
+    # pkd_used bits 2+: all 6 attr flags = 1
+    pkd_used = 0xFC
+    data = _make_xf_data_biff4(pkd_used=pkd_used)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf._format_flag == 1
+    assert xf._font_flag == 1
+    assert xf._alignment_flag == 1
+    assert xf._border_flag == 1
+    assert xf._background_flag == 1
+    assert xf._protection_flag == 1
+
+
+def test_handle_xf_biff4_background_fields():
+    book = MockBook(biff_version=40, formatting_info=True)
+    # pkd_bkg_34: fill_pattern bits 0-5=3, pattern_colour_index bits 6-10=2
+    pkd_bkg_34 = 3 | (2 << 6)
+    data = _make_xf_data_biff4(pkd_bkg_34=pkd_bkg_34)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.background.fill_pattern == 3
+    assert xf.background.pattern_colour_index == 2
+
+
+def test_handle_xf_biff4_border_fields():
+    book = MockBook(biff_version=40, formatting_info=True)
+    # pkd_brd_34 bits 0-2: top_line_style=5
+    pkd_brd_34 = 5
+    data = _make_xf_data_biff4(pkd_brd_34=pkd_brd_34)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.border.top_line_style == 5
+
+
+# ===== handle_xf (BIFF3 / bv == 30) =====
+
+def _make_xf_data_biff3(font_index=0, format_key=0, pkd_type_prot=0,
+                          pkd_used=0xFC, pkd_align_par=0,
+                          pkd_bkg_34=0, pkd_brd_34=0):
+    return struct.pack('<BBBBHHI',
+                       font_index, format_key, pkd_type_prot,
+                       pkd_used, pkd_align_par,
+                       pkd_bkg_34, pkd_brd_34)
+
+
+def test_handle_xf_biff3_creates_xf():
+    book = MockBook(biff_version=30, formatting_info=True)
+    data = _make_xf_data_biff3()
+    handle_xf(book, data)
+    assert len(book.xf_list) == 1
+    assert book.xfcount == 1
+
+
+def test_handle_xf_biff3_protection_flags():
+    book = MockBook(biff_version=30, formatting_info=True)
+    pkd_type_prot = 0x03
+    data = _make_xf_data_biff3(pkd_type_prot=pkd_type_prot)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.protection.cell_locked == 1
+    assert xf.protection.formula_hidden == 1
+
+
+def test_handle_xf_biff3_is_style():
+    book = MockBook(biff_version=30, formatting_info=True)
+    data = _make_xf_data_biff3(pkd_type_prot=0x0004)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.is_style == 1
+
+
+def test_handle_xf_biff3_alignment():
+    book = MockBook(biff_version=30, formatting_info=True)
+    # hor_align=3, text_wrapped=1 in pkd_align_par bits 0-3
+    pkd_align_par = 3 | (1 << 3)
+    data = _make_xf_data_biff3(pkd_align_par=pkd_align_par)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.alignment.hor_align == 3
+    assert xf.alignment.text_wrapped == 1
+
+
+def test_handle_xf_biff3_parent_style_index():
+    book = MockBook(biff_version=30, formatting_info=True)
+    # parent_style_index in pkd_align_par bits 4-15
+    pkd_align_par = (5 << 4)
+    data = _make_xf_data_biff3(pkd_align_par=pkd_align_par)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.parent_style_index == 5
+
+
+def test_handle_xf_biff3_attr_flags():
+    book = MockBook(biff_version=30, formatting_info=True)
+    pkd_used = 0xFC  # all 6 attr flags set
+    data = _make_xf_data_biff3(pkd_used=pkd_used)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf._format_flag == 1
+    assert xf._font_flag == 1
+    assert xf._alignment_flag == 1
+    assert xf._border_flag == 1
+    assert xf._background_flag == 1
+    assert xf._protection_flag == 1
+
+
+def test_handle_xf_biff3_vert_align_and_rotation():
+    """Lines 940-941: BIFF3 always sets vert_align=2 and rotation=0."""
+    book = MockBook(biff_version=30, formatting_info=True)
+    data = _make_xf_data_biff3()
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.alignment.vert_align == 2
+    assert xf.alignment.rotation == 0
+
+
+def test_handle_xf_biff3_background_fields():
+    book = MockBook(biff_version=30, formatting_info=True)
+    pkd_bkg_34 = 7 | (3 << 6)
+    data = _make_xf_data_biff3(pkd_bkg_34=pkd_bkg_34)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.background.fill_pattern == 7
+    assert xf.background.pattern_colour_index == 3
+
+
+def test_handle_xf_biff3_border_fields():
+    book = MockBook(biff_version=30, formatting_info=True)
+    pkd_brd_34 = 6
+    data = _make_xf_data_biff3(pkd_brd_34=pkd_brd_34)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.border.top_line_style == 6
+
+
+# ===== handle_xf (BIFF2 / bv == 21) =====
+
+def _make_xf_data_biff2(font_index=0, format_etc=0, halign_etc=0):
+    return struct.pack('<BxBB', font_index, format_etc, halign_etc)
+
+
+def test_handle_xf_biff2_creates_xf():
+    book = MockBook(biff_version=21, formatting_info=True)
+    data = _make_xf_data_biff2()
+    handle_xf(book, data)
+    assert len(book.xf_list) == 1
+    assert book.xfcount == 1
+
+
+def test_handle_xf_biff2_format_key():
+    book = MockBook(biff_version=21, formatting_info=True)
+    # format_key = format_etc & 0x3F; pre-populate map so key is not reset
+    book.format_map[0x0F] = Format(0x0F, FNU, '0.000')
+    data = _make_xf_data_biff2(format_etc=0x0F)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.format_key == 0x0F
+
+
+def test_handle_xf_biff2_protection_flags():
+    book = MockBook(biff_version=21, formatting_info=True)
+    # cell_locked = bit 6, formula_hidden = bit 7 of format_etc
+    data = _make_xf_data_biff2(format_etc=0xC0)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.protection.cell_locked == 1
+    assert xf.protection.formula_hidden == 1
+
+
+def test_handle_xf_biff2_hor_align():
+    book = MockBook(biff_version=21, formatting_info=True)
+    # hor_align in bits 0-2 of halign_etc
+    data = _make_xf_data_biff2(halign_etc=0x03)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.alignment.hor_align == 3
+
+
+def test_handle_xf_biff2_border_sides_set():
+    """Lines 956-962: borders set when mask bits in halign_etc are set."""
+    book = MockBook(biff_version=21, formatting_info=True)
+    # set all border bits: left=0x08, right=0x10, top=0x20, bottom=0x40
+    halign_etc = 0x08 | 0x10 | 0x20 | 0x40
+    data = _make_xf_data_biff2(halign_etc=halign_etc)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.border.left_colour_index == 8
+    assert xf.border.left_line_style == 1
+    assert xf.border.right_colour_index == 8
+    assert xf.border.right_line_style == 1
+    assert xf.border.top_colour_index == 8
+    assert xf.border.top_line_style == 1
+    assert xf.border.bottom_colour_index == 8
+    assert xf.border.bottom_line_style == 1
+
+
+def test_handle_xf_biff2_border_sides_unset():
+    """Lines 959-962: borders cleared when mask bits not set."""
+    book = MockBook(biff_version=21, formatting_info=True)
+    data = _make_xf_data_biff2(halign_etc=0x00)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.border.left_colour_index == 0
+    assert xf.border.left_line_style == 0
+    assert xf.border.right_colour_index == 0
+    assert xf.border.right_line_style == 0
+
+
+def test_handle_xf_biff2_fill_pattern_set():
+    """Lines 964-965: fill_pattern=17 when bit 7 of halign_etc set."""
+    book = MockBook(biff_version=21, formatting_info=True)
+    data = _make_xf_data_biff2(halign_etc=0x80)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.background.fill_pattern == 17
+
+
+def test_handle_xf_biff2_fill_pattern_not_set():
+    """Lines 966-967: fill_pattern=0 when bit 7 of halign_etc not set."""
+    book = MockBook(biff_version=21, formatting_info=True)
+    data = _make_xf_data_biff2(halign_etc=0x00)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.background.fill_pattern == 0
+
+
+def test_handle_xf_biff2_background_colour_defaults():
+    """Lines 968-969: background defaults set for BIFF2."""
+    book = MockBook(biff_version=21, formatting_info=True)
+    data = _make_xf_data_biff2()
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.background.background_colour_index == 9
+    assert xf.background.pattern_colour_index == 8
+
+
+def test_handle_xf_biff2_misc_defaults():
+    """Lines 970-972: parent_style_index, vert_align, rotation defaults."""
+    book = MockBook(biff_version=21, formatting_info=True)
+    data = _make_xf_data_biff2()
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.parent_style_index == 0
+    assert xf.alignment.vert_align == 2
+    assert xf.alignment.rotation == 0
+
+
+def test_handle_xf_biff2_all_attr_flags_set():
+    """Lines 981-983: all attr flags set to 1 for BIFF2."""
+    book = MockBook(biff_version=21, formatting_info=True)
+    data = _make_xf_data_biff2()
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf._format_flag == 1
+    assert xf._font_flag == 1
+    assert xf._alignment_flag == 1
+    assert xf._border_flag == 1
+    assert xf._background_flag == 1
+    assert xf._protection_flag == 1
+
+
+# ===== handle_xf else branch (invalid biff_version) =====
+
+def test_handle_xf_invalid_biff_version_raises():
+    """Line 985: invalid bv raises XLRDError."""
+    book = MockBook(biff_version=20, formatting_info=True)
+    data = b'\x00' * 20
+    with pytest.raises(XLRDError):
+        handle_xf(book, data)
+
+
+# ===== handle_xf end-of-function branches =====
+
+def test_handle_xf_biff8_is_style_warning_with_verbosity():
+    """Lines 1006-1007: is_style XF with non-0x0FFF parent_style_index logs warning."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    # pkd_type_par=0x0004 -> is_style=1, parent_style_index=0 (not 0x0FFF)
+    data = _make_xf_data_biff8(pkd_type_par=0x0004)
+    handle_xf(book, data)
+    log = book.logfile.getvalue()
+    assert "parent_style_index" in log
+
+
+def test_handle_xf_biff8_unknown_format_key_no_verbosity():
+    """Lines 1010, 1014: format_key not in format_map resets to 0 without logging warning."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=0)
+    fill_in_standard_formats(book)
+    data = _make_xf_data_biff8(format_key=9999)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.format_key == 0
+    assert "unknown (raw) format key" not in book.logfile.getvalue()
+
+
+def test_handle_xf_biff8_unknown_format_key_with_verbosity():
+    """Lines 999-1000, 1010-1014: format_key not in format_map with verbosity logs warning."""
+    book = MockBook(biff_version=80, formatting_info=True, verbosity=1)
+    fill_in_standard_formats(book)
+    data = _make_xf_data_biff8(format_key=9999)
+    handle_xf(book, data)
+    xf = book.xf_list[0]
+    assert xf.format_key == 0
+    log = book.logfile.getvalue()
+    assert "unknown (raw) format key" in log
