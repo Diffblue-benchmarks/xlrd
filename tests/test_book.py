@@ -519,3 +519,158 @@ class TestNameArea2d:
         n.book = xlrd.open_workbook(file_contents=make_minimal_xls())
         with pytest.raises(XLRDError):
             n.area2d()
+
+
+# ---------------------------------------------------------------------------
+# unpack_SST_table
+# ---------------------------------------------------------------------------
+
+class TestUnpackSSTTable:
+
+    def _make_sst_header(self):
+        """Return 8-byte SST record header (skipped by the function)."""
+        return b'\x00' * 8
+
+    def _pack_string(self, text, utf16=False, richtext_runs=None, phonetic_size=0):
+        """Pack a single SST string entry."""
+        nchars = len(text)
+        options = 0
+        if utf16:
+            options |= 0x01
+        if richtext_runs:
+            options |= 0x08
+        if phonetic_size:
+            options |= 0x04
+
+        data = struct.pack('<H', nchars) + bytes([options])
+        if richtext_runs:
+            data += struct.pack('<H', len(richtext_runs))
+        if phonetic_size:
+            data += struct.pack('<i', phonetic_size)
+        if utf16:
+            data += text.encode('utf-16-le')
+        else:
+            data += text.encode('latin-1')
+        for char_idx, font_idx in (richtext_runs or []):
+            data += struct.pack('<HH', char_idx, font_idx)
+        data += b'\x00' * phonetic_size
+        return data
+
+    def test_single_compressed_string(self):
+        from xlrd.book import unpack_SST_table
+        buf = self._make_sst_header() + self._pack_string('Hello')
+        strings, richtext = unpack_SST_table([buf], 1)
+        assert strings == ['Hello']
+        assert richtext == {}
+
+    def test_single_utf16_string(self):
+        from xlrd.book import unpack_SST_table
+        buf = self._make_sst_header() + self._pack_string('World', utf16=True)
+        strings, richtext = unpack_SST_table([buf], 1)
+        assert strings == ['World']
+        assert richtext == {}
+
+    def test_utf16_unicode_chars(self):
+        from xlrd.book import unpack_SST_table
+        text = '\u4e2d\u6587'
+        buf = self._make_sst_header() + self._pack_string(text, utf16=True)
+        strings, richtext = unpack_SST_table([buf], 1)
+        assert strings == [text]
+
+    def test_multiple_compressed_strings(self):
+        from xlrd.book import unpack_SST_table
+        texts = ['Alpha', 'Beta', 'Gamma']
+        raw = b''.join(self._pack_string(t) for t in texts)
+        buf = self._make_sst_header() + raw
+        strings, richtext = unpack_SST_table([buf], 3)
+        assert strings == texts
+        assert richtext == {}
+
+    def test_empty_string(self):
+        from xlrd.book import unpack_SST_table
+        buf = self._make_sst_header() + self._pack_string('')
+        strings, richtext = unpack_SST_table([buf], 1)
+        assert strings == ['']
+
+    def test_richtext_string(self):
+        from xlrd.book import unpack_SST_table
+        runs = [(0, 1), (2, 2)]
+        buf = self._make_sst_header() + self._pack_string('Rich', richtext_runs=runs)
+        strings, richtext = unpack_SST_table([buf], 1)
+        assert strings == ['Rich']
+        assert 0 in richtext
+        assert richtext[0] == [(0, 1), (2, 2)]
+
+    def test_phonetic_string(self):
+        from xlrd.book import unpack_SST_table
+        buf = self._make_sst_header() + self._pack_string('Test', phonetic_size=4)
+        strings, richtext = unpack_SST_table([buf], 1)
+        assert strings == ['Test']
+        assert richtext == {}
+
+    def test_string_spanning_buffers_compressed(self):
+        """Compressed string split across two data buffers."""
+        from xlrd.book import unpack_SST_table
+        text = 'LongString'  # 10 chars
+        nchars = len(text)
+        # buf1: header + nchars(2) + options(1) + first 5 chars
+        buf1 = self._make_sst_header() + struct.pack('<H', nchars) + b'\x00' + text[:5].encode('latin-1')
+        # buf2: options byte (0x00=compressed) + remaining 5 chars
+        buf2 = b'\x00' + text[5:].encode('latin-1')
+        strings, richtext = unpack_SST_table([buf1, buf2], 1)
+        assert strings == [text]
+
+    def test_string_spanning_buffers_utf16(self):
+        """UTF-16 string split across two data buffers."""
+        from xlrd.book import unpack_SST_table
+        text = 'Spanning'  # 8 chars, 16 bytes utf-16-le
+        nchars = len(text)
+        encoded = text.encode('utf-16-le')
+        # buf1: header + nchars(2) + options(1=utf16) + first 4 chars (8 bytes)
+        buf1 = self._make_sst_header() + struct.pack('<H', nchars) + b'\x01' + encoded[:8]
+        # buf2: options byte (0x01=utf16) + remaining 4 chars (8 bytes)
+        buf2 = b'\x01' + encoded[8:]
+        strings, richtext = unpack_SST_table([buf1, buf2], 1)
+        assert strings == [text]
+
+    def test_richtext_runs_spanning_buffer(self):
+        """Richtext runs begin in next data buffer (pos == datalen after string)."""
+        from xlrd.book import unpack_SST_table
+        text = 'RT'
+        rtcount = 2
+        options = 0x08
+        # buf1: header(8) + nchars(2) + options(1) + rtcount(2) + chars(2) = 15 bytes
+        buf1 = (
+            self._make_sst_header()
+            + struct.pack('<H', len(text))
+            + bytes([options])
+            + struct.pack('<H', rtcount)
+            + text.encode('latin-1')
+        )
+        # buf2: two richtext runs (4 bytes each)
+        buf2 = struct.pack('<HH', 0, 1) + struct.pack('<HH', 1, 2)
+        strings, richtext = unpack_SST_table([buf1, buf2], 1)
+        assert strings == [text]
+        assert 0 in richtext
+        assert len(richtext[0]) == 2
+
+    def test_phonetic_triggers_buffer_advance(self):
+        """Phonetic skip causes advance to next data buffer."""
+        from xlrd.book import unpack_SST_table
+        text1 = 'A'
+        text2 = 'B'
+        phonetic_size = 3
+        # buf1: header(8) + nchars(2) + options(1) + phosz(4) + char(1) + phonetic(3) = 19 bytes
+        buf1 = (
+            self._make_sst_header()
+            + struct.pack('<H', 1)
+            + bytes([0x04])
+            + struct.pack('<i', phonetic_size)
+            + text1.encode('latin-1')
+            + b'\x00' * phonetic_size
+        )
+        # After skipping phonetic: pos = 16+3 = 19 = datalen → advance to buf2, pos = 0
+        # buf2: second string
+        buf2 = struct.pack('<H', 1) + b'\x00' + text2.encode('latin-1')
+        strings, richtext = unpack_SST_table([buf1, buf2], 2)
+        assert strings == [text1, text2]
