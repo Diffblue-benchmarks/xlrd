@@ -430,6 +430,34 @@ def test_palette_epilogue_skips_system_colour():
     assert 0x7fff not in book.colour_indexes_used
 
 
+def test_palette_epilogue_unknown_colour_with_verbosity():
+    book = MockBook(formatting_info=True, verbosity=1)
+    initialise_colour_map(book)
+    from xlrd.formatting import Font
+    f = Font()
+    f.font_index = 0
+    f.colour_index = 0x1234  # unknown colour not in colour_map
+    f.name = 'Arial'
+    book.font_list = [f]
+    palette_epilogue(book)
+    log_output = book.logfile.getvalue()
+    assert '0x1234' in log_output or 'unknown' in log_output
+
+
+def test_palette_epilogue_verbosity_prints_used_indexes():
+    book = MockBook(formatting_info=True, verbosity=1)
+    initialise_colour_map(book)
+    from xlrd.formatting import Font
+    f = Font()
+    f.font_index = 0
+    f.colour_index = 8  # known colour
+    f.name = 'Arial'
+    book.font_list = [f]
+    palette_epilogue(book)
+    log_output = book.logfile.getvalue()
+    assert 'Colour indexes used' in log_output
+
+
 # ===== handle_style =====
 
 def test_handle_style_no_formatting_info():
