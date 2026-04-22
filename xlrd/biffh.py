@@ -569,7 +569,7 @@ def biff_dump(mem, stream_offset, stream_len, base=0, fout=sys.stdout, unnumbere
             else:
                 savpos = pos
                 dummies = 4
-            pos += 4
+            pos = 4
         else:
             if dummies:
                 if numbered:
